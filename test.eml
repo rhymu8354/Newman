@@ -1,0 +1,18 @@
+To: <bob@example.com>
+From: <alex@example.com>
+Subject: Test
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+Content-Language: en-US
+X-SMTP-Client-Hostname: [127.0.0.1]
+X-SMTP-Server-Hostname: localhost
+X-SMTP-Port: 465
+X-SMTP-Username: alex@example.com
+X-SMTP-Password: hunter2
+
+This is a test!
+This was send using Newman, the latest and greatest
+e-mail delivery system from the awesome programmer, Rhymu!
+
+Have a great day!
