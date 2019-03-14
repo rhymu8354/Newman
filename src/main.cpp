@@ -213,6 +213,147 @@ namespace {
         return email;
     }
 
+    /**
+     * This is used to indicate what happened while waiting for a promise
+     * to be completed.
+     */
+    enum class WaitResult {
+        /**
+         * The promise was completed and indicated success.
+         */
+        Success,
+
+        /**
+         * The promise was completed and indicated failure.
+         */
+        Failure,
+
+        /**
+         * The promise did not complete.
+         */
+        Incomplete,
+    };
+
+    /**
+     * Wait for the given future to be completed.
+     *
+     * @param[in] future
+     *     This is the future on which to wait.
+     *
+     * @return
+     *     An indication of the result of the wait is returned.
+     *     See the definition of `WaitResult` for more details.
+     */
+    WaitResult AwaitFuture(std::future< bool >& future) {
+        if (
+            future.wait_for(std::chrono::milliseconds(5000))
+            != std::future_status::ready
+        ) {
+            return WaitResult::Incomplete;
+        }
+        if (future.get()) {
+            return WaitResult::Success;
+        } else {
+            return WaitResult::Failure;
+        }
+    }
+
+    /**
+     * Connect to the SMTP server, using parameters extracted
+     * from the given e-mail.
+     *
+     * @param[in,out] client
+     *     This is the SMTP client to use to connect to the SMTP server.
+     *
+     * @param[in,out] email
+     *     This is the e-mail from which to extract the SMTP server parameters.
+     *
+     * @param[in] provideCredentials
+     *     This is the function to call to provide the SMTP client with
+     *     the login credentials to use with the SMTP server.
+     *
+     * @param[in] diagnosticMessageDelegate
+     *     This is the function to call to publish any diagnostic messages.
+     *
+     * @return
+     *     An indication of whether or not the connection to the SMTP server
+     *     was successfully made is returned.
+     */
+    bool ConnectToServer(
+        Smtp::Client& client,
+        Email& email,
+        LoginFunction provideCredentials,
+        SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate diagnosticMessageDelegate
+    ) {
+        diagnosticMessageDelegate("Newman", 3, "Connecting to SMTP server.");
+        const auto clientHostName = email.headers.GetHeaderValue("X-SMTP-Client-Hostname");
+        email.headers.RemoveHeader("X-SMTP-Client-Hostname");
+        const auto serverHostName = email.headers.GetHeaderValue("X-SMTP-Server-Hostname");
+        email.headers.RemoveHeader("X-SMTP-Server-Hostname");
+        const auto serverPortNumberAsString = email.headers.GetHeaderValue("X-SMTP-Port");
+        email.headers.RemoveHeader("X-SMTP-Port");
+        const auto username = email.headers.GetHeaderValue("X-SMTP-Username");
+        email.headers.RemoveHeader("X-SMTP-Username");
+        const auto password = email.headers.GetHeaderValue("X-SMTP-Password");
+        email.headers.RemoveHeader("X-SMTP-Password");
+        provideCredentials(username, password);
+        uint16_t serverPortNumber = 0;
+        (void)sscanf(
+            serverPortNumberAsString.c_str(),
+            "%" SCNu16,
+            &serverPortNumber
+        );
+        auto futureConnectSuccess = client.Connect(
+            clientHostName,
+            serverHostName,
+            serverPortNumber
+        );
+        return futureConnectSuccess.get();
+    }
+
+    /**
+     * Wait for the SMTP client/server to be ready to accept the next e-mail.
+     *
+     * @param[in,out] client
+     *     This is the SMTP client for whom to wait.
+     *
+     * @param[in] diagnosticMessageDelegate
+     *     This is the function to call to publish any diagnostic messages.
+     *
+     * @return
+     *     An indication of whether or not the SMTP client/server are ready
+     *     to accept the next e-mail is returned.
+     *
+     * @retval false
+     *     This is returned if there is any kind of problem resulting in
+     *     not being able to send e-mail.
+     */
+    bool WaitForClientReadyToSend(
+        Smtp::Client& client,
+        SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate diagnosticMessageDelegate
+    ) {
+        auto readyOrBroken = client.GetReadyOrBrokenFuture();
+        switch (AwaitFuture(readyOrBroken)) {
+            case WaitResult::Failure: {
+                diagnosticMessageDelegate(
+                    "Newman",
+                    SystemAbstractions::DiagnosticsSender::Levels::WARNING,
+                    "There was a problem setting up to send the e-mail!"
+                );
+            } return false;
+
+            case WaitResult::Incomplete: {
+                diagnosticMessageDelegate(
+                    "Newman",
+                    SystemAbstractions::DiagnosticsSender::Levels::WARNING,
+                    "Timeout waiting to set up to send the e-mail!"
+                );
+            } return false;
+
+            default: return true;
+        }
+    }
+
 }
 
 /**
@@ -246,30 +387,12 @@ int main(int argc, char* argv[]) {
     Smtp::Client client;
     const auto provideCredentials = SetupClient(client, environment.caCertsFileName);
     auto email = ReadEmail(environment.emailFileName);
-    diagnosticsPublisher("Newman", 3, "Connecting to SMTP server.");
-    const auto clientHostName = email.headers.GetHeaderValue("X-SMTP-Client-Hostname");
-    email.headers.RemoveHeader("X-SMTP-Client-Hostname");
-    const auto serverHostName = email.headers.GetHeaderValue("X-SMTP-Server-Hostname");
-    email.headers.RemoveHeader("X-SMTP-Server-Hostname");
-    const auto serverPortNumberAsString = email.headers.GetHeaderValue("X-SMTP-Port");
-    email.headers.RemoveHeader("X-SMTP-Port");
-    const auto username = email.headers.GetHeaderValue("X-SMTP-Username");
-    email.headers.RemoveHeader("X-SMTP-Username");
-    const auto password = email.headers.GetHeaderValue("X-SMTP-Password");
-    email.headers.RemoveHeader("X-SMTP-Password");
-    provideCredentials(username, password);
-    uint16_t serverPortNumber = 0;
-    (void)sscanf(
-        serverPortNumberAsString.c_str(),
-        "%" SCNu16,
-        &serverPortNumber
+    const auto connectSuccess = ConnectToServer(
+        client,
+        email,
+        provideCredentials,
+        diagnosticsPublisher
     );
-    auto futureConnectSuccess = client.Connect(
-        clientHostName,
-        serverHostName,
-        serverPortNumber
-    );
-    const auto connectSuccess = futureConnectSuccess.get();
     if (connectSuccess) {
         diagnosticsPublisher("Newman", 3, "Connected to SMTP server.");
     } else {
@@ -281,45 +404,32 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     diagnosticsPublisher("Newman", 3, "Preparing to send e-mail...");
-    auto readyToSend = client.GetMessageReadyBeSentFuture();
-    auto failure = client.GetFailureFuture();
-    if (
-        readyToSend.wait_for(std::chrono::milliseconds(5000))
-        != std::future_status::ready
-    ) {
-        if (
-            failure.wait_for(std::chrono::seconds(0))
-            == std::future_status::ready
-        ) {
-            diagnosticsPublisher(
-                "Newman",
-                SystemAbstractions::DiagnosticsSender::Levels::WARNING,
-                "There was a problem setting up to send the e-mail!"
-            );
-            return EXIT_FAILURE;
-        } else {
-            diagnosticsPublisher(
-                "Newman",
-                SystemAbstractions::DiagnosticsSender::Levels::WARNING,
-                "Timeout waiting to set up to send the e-mail!"
-            );
-            return EXIT_FAILURE;
-        }
-    }
-    diagnosticsPublisher("Newman", 3, "Sending e-mail.");
-    auto futureSendSuccess = client.SendMail(email.headers, email.body);
-    diagnosticsPublisher("Newman", 3, "Waiting for e-mail to be sent...");
-    const auto sendSuccess = futureSendSuccess.get();
-    if (sendSuccess) {
-        diagnosticsPublisher("Newman", 3, "E-mail successfully sent.");
-    } else {
-        diagnosticsPublisher(
-            "Newman",
-            SystemAbstractions::DiagnosticsSender::Levels::WARNING,
-            "There was a problem sending the e-mail!"
-        );
+    if (!WaitForClientReadyToSend(client, diagnosticsPublisher)) {
         return EXIT_FAILURE;
     }
+    diagnosticsPublisher("Newman", 3, "Sending e-mail.");
+    auto sendCompleted = client.SendMail(email.headers, email.body);
+    diagnosticsPublisher("Newman", 3, "Waiting for e-mail to be sent...");
+    switch (AwaitFuture(sendCompleted)) {
+        case WaitResult::Failure: {
+            diagnosticsPublisher(
+                "Newman",
+                SystemAbstractions::DiagnosticsSender::Levels::WARNING,
+                "There was a problem sending the e-mail!"
+            );
+        } return EXIT_FAILURE;
+
+        case WaitResult::Incomplete: {
+            diagnosticsPublisher(
+                "Newman",
+                SystemAbstractions::DiagnosticsSender::Levels::WARNING,
+                "Timeout waiting for server to accept the e-mail!"
+            );
+        } return EXIT_FAILURE;
+
+        default: break;
+    }
+    diagnosticsPublisher("Newman", 3, "E-mail successfully sent.");
 //    const auto diagnosticsSubscription = client.SubscribeToDiagnostics(diagnosticsPublisher);
     (void)signal(SIGINT, previousInterruptHandler);
     diagnosticsPublisher("Newman", 3, "Exiting...");
