@@ -323,8 +323,10 @@ namespace {
     /**
      * Wait for the SMTP client/server to be ready to accept the next e-mail.
      *
-     * @param[in,out] client
-     *     This is the SMTP client for whom to wait.
+     * @param[in,out] readyOrBroken
+     *     This is the future end of the promise set when the SMTP
+     *     client/server is either ready to accept the next e-mail, or
+     *     the connection between them has been broken.
      *
      * @param[in] diagnosticMessageDelegate
      *     This is the function to call to publish any diagnostic messages.
@@ -338,10 +340,9 @@ namespace {
      *     not being able to send e-mail.
      */
     bool WaitForClientReadyToSend(
-        Smtp::Client& client,
+        std::future< bool >& readyOrBroken,
         SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate diagnosticMessageDelegate
     ) {
-        auto readyOrBroken = client.GetReadyOrBrokenFuture();
         switch (AwaitFuture(readyOrBroken)) {
             case WaitResult::Failure: {
                 diagnosticMessageDelegate(
@@ -396,6 +397,7 @@ int main(int argc, char* argv[]) {
     Smtp::Client client;
     const auto provideCredentials = SetupClient(client, environment.caCertsFileName);
     auto email = ReadEmail(environment.emailFileName);
+    auto readyOrBroken = client.GetReadyOrBrokenFuture();
     const auto connectSuccess = ConnectToServer(
         client,
         email,
@@ -413,7 +415,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     diagnosticsPublisher("Newman", 3, "Preparing to send e-mail...");
-    if (!WaitForClientReadyToSend(client, diagnosticsPublisher)) {
+    if (!WaitForClientReadyToSend(readyOrBroken, diagnosticsPublisher)) {
         return EXIT_FAILURE;
     }
     diagnosticsPublisher("Newman", 3, "Sending e-mail.");
