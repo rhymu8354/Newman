@@ -156,7 +156,8 @@ namespace {
 
     LoginFunction SetupClient(
         Smtp::Client& client,
-        const std::string& caCertsFileName
+        const std::string& caCertsFileName,
+        SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate diagnosticMessageDelegate
     ) {
         auto saslLogin = std::make_shared< Sasl::Client::Login >();
         auto saslPlain = std::make_shared< Sasl::Client::Plain >();
@@ -167,6 +168,7 @@ namespace {
             256
         );
         auto auth = std::make_shared< SmtpAuth::Client >();
+        auth->SubscribeToDiagnostics(diagnosticMessageDelegate);
         auth->Register("LOGIN", 1, saslLogin);
         auth->Register("PLAIN", 2, saslPlain);
         auth->Register("SCRAM-SHA-256", 3, saslScram);
@@ -395,7 +397,12 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     Smtp::Client client;
-    const auto provideCredentials = SetupClient(client, environment.caCertsFileName);
+    client.SubscribeToDiagnostics(diagnosticsPublisher);
+    const auto provideCredentials = SetupClient(
+        client,
+        environment.caCertsFileName,
+        diagnosticsPublisher
+    );
     auto email = ReadEmail(environment.emailFileName);
     auto readyOrBroken = client.GetReadyOrBrokenFuture();
     const auto connectSuccess = ConnectToServer(
