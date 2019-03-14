@@ -159,8 +159,17 @@ namespace {
         const std::string& caCertsFileName
     ) {
         auto saslLogin = std::make_shared< Sasl::Client::Login >();
+        auto saslPlain = std::make_shared< Sasl::Client::Plain >();
+        auto saslScram = std::make_shared< Sasl::Client::Scram >();
+        saslScram->SetHashFunction(
+            Hash::Sha256,
+            Hash::SHA256_BLOCK_SIZE,
+            256
+        );
         auto auth = std::make_shared< SmtpAuth::Client >();
-        auth->Configure("LOGIN", saslLogin);
+        auth->Register("LOGIN", 1, saslLogin);
+        auth->Register("PLAIN", 2, saslPlain);
+        auth->Register("SCRAM-SHA-256", 3, saslScram);
         client.RegisterExtension("AUTH", auth);
         std::ifstream caCertsFile(caCertsFileName);
         std::ostringstream caCertsBuilder;
@@ -169,11 +178,11 @@ namespace {
             caCertsBuilder << line << "\r\n";
         }
         client.EnableTls(caCertsBuilder.str());
-        return [saslLogin](
+        return [auth](
             const std::string& username,
             const std::string& password
         ){
-            saslLogin->SetCredentials(password, username);
+            auth->SetCredentials(password, username);
         };
     }
 
