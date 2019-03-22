@@ -297,8 +297,6 @@ namespace {
         SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate diagnosticMessageDelegate
     ) {
         diagnosticMessageDelegate("Newman", 3, "Connecting to SMTP server.");
-        const auto clientHostName = email.headers.GetHeaderValue("X-SMTP-Client-Hostname");
-        email.headers.RemoveHeader("X-SMTP-Client-Hostname");
         const auto serverHostName = email.headers.GetHeaderValue("X-SMTP-Server-Hostname");
         email.headers.RemoveHeader("X-SMTP-Server-Hostname");
         const auto serverPortNumberAsString = email.headers.GetHeaderValue("X-SMTP-Port");
@@ -315,7 +313,6 @@ namespace {
             &serverPortNumber
         );
         auto futureConnectSuccess = client.Connect(
-            clientHostName,
             serverHostName,
             serverPortNumber
         );
