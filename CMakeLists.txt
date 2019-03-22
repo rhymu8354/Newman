@@ -21,6 +21,7 @@ target_link_libraries(${This} PUBLIC
     Smtp
     SmtpAuth
     SystemAbstractions
+    TlsDecorator
 )
 
 if(UNIX AND NOT APPLE)

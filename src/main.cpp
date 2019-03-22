@@ -18,13 +18,49 @@
 #include <Smtp/Client.hpp>
 #include <SmtpAuth/Client.hpp>
 #include <SystemAbstractions/DiagnosticsStreamReporter.hpp>
+#include <SystemAbstractions/NetworkConnection.hpp>
 #include <signal.h>
 #include <sstream>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <TlsDecorator/TlsDecorator.hpp>
 
 namespace {
+
+    struct SmtpTransport
+        : public Smtp::Client::Transport
+    {
+        std::string caCerts;
+
+        // Smtp::Client::Transport
+
+        virtual std::shared_ptr< SystemAbstractions::INetworkConnection > Connect(
+            const std::string& hostNameOrAddress,
+            uint16_t port
+        ) override {
+            std::shared_ptr< SystemAbstractions::INetworkConnection > serverConnection
+                = std::make_shared< SystemAbstractions::NetworkConnection >();
+            std::shared_ptr < TlsDecorator::TlsDecorator > tls;
+            tls = std::make_shared< TlsDecorator::TlsDecorator >();
+            tls->ConfigureAsClient(
+                serverConnection,
+                caCerts,
+                hostNameOrAddress
+            );
+            serverConnection = tls;
+            const auto hostAddress = SystemAbstractions::NetworkConnection::GetAddressOfHost(
+                hostNameOrAddress
+            );
+            if (hostAddress == 0) {
+                return nullptr;
+            }
+            if (!serverConnection->Connect(hostAddress, port)) {
+                return nullptr;
+            }
+            return serverConnection;
+        }
+    };
 
     /**
      * This function prints to the standard error stream information
@@ -167,6 +203,8 @@ namespace {
             Hash::SHA256_BLOCK_SIZE,
             256
         );
+        auto transport = std::make_shared< SmtpTransport >();
+        client.Configure(transport);
         auto auth = std::make_shared< SmtpAuth::Client >();
         auth->SubscribeToDiagnostics(diagnosticMessageDelegate);
         auth->Register("LOGIN", 1, saslLogin);
@@ -179,7 +217,7 @@ namespace {
         while (std::getline(caCertsFile, line)) {
             caCertsBuilder << line << "\r\n";
         }
-        client.EnableTls(caCertsBuilder.str());
+        transport->caCerts = caCertsBuilder.str();
         return [auth](
             const std::string& username,
             const std::string& password
@@ -394,7 +432,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     Smtp::Client client;
-    client.SubscribeToDiagnostics(diagnosticsPublisher);
+    client.SubscribeToDiagnostics(diagnosticsPublisher, 1);
     const auto provideCredentials = SetupClient(
         client,
         environment.caCertsFileName,
